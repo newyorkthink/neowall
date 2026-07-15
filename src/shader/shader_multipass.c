@@ -326,6 +326,52 @@ void multipass_set_channel(multipass_shader_t *shader,
     }
 }
 
+bool multipass_set_external_texture(multipass_shader_t *shader,
+                                    int channel, GLuint texture_id) {
+    if (!shader || channel < 0 || channel >= MULTIPASS_MAX_CHANNELS) {
+        return false;
+    }
+
+    bool bound = false;
+
+    /* Respect manifest bindings, including texture inputs on buffer passes. */
+    for (int i = 0; i < shader->pass_count; i++) {
+        multipass_pass_t *pass = &shader->passes[i];
+        if (pass->channels[channel].source != CHANNEL_SOURCE_TEXTURE) {
+            continue;
+        }
+
+        pass->channels[channel].texture_id = (int)texture_id;
+        pass->channel_buffer_index[channel] = -1;
+        log_info("External texture: %s iChannel%d -> texture %u",
+                 pass->name, channel, texture_id);
+        bound = true;
+    }
+
+    if (bound) {
+        return true;
+    }
+
+    /* A config-level channels[] assignment is useful without a sidecar too.
+     * In that case it feeds the final Image pass by default. */
+    for (int i = 0; i < shader->pass_count; i++) {
+        multipass_pass_t *pass = &shader->passes[i];
+        if (pass->type != PASS_TYPE_IMAGE) {
+            continue;
+        }
+
+        shader->explicit_bindings = true;
+        pass->channels[channel].source = CHANNEL_SOURCE_TEXTURE;
+        pass->channels[channel].texture_id = (int)texture_id;
+        pass->channel_buffer_index[channel] = -1;
+        log_info("External texture: %s iChannel%d -> texture %u (config default)",
+                 pass->name, channel, texture_id);
+        return true;
+    }
+
+    return false;
+}
+
 void multipass_add_user_uniform(multipass_shader_t *shader,
                                 const char *name, uniform_bind_t bind, float value) {
     if (!shader || !name || shader->user_uniform_count >= MULTIPASS_MAX_USER_UNIFORMS) return;
@@ -1990,6 +2036,20 @@ void multipass_bind_textures(multipass_shader_t *shader, int pass_index) {
         (void)source_name; /* Used for debug logging */
 
         switch (pass->channels[c].source) {
+            case CHANNEL_SOURCE_TEXTURE:
+                if (pass->channels[c].texture_id > 0) {
+                    tex = (GLuint)pass->channels[c].texture_id;
+                    source_name = "texture";
+                    log_debug_frame(shader->frame_count,
+                              "  iChannel%d: Bound to external texture %u",
+                              c, tex);
+                } else {
+                    log_debug_frame(shader->frame_count,
+                              "  iChannel%d: External texture unavailable, using noise",
+                              c);
+                }
+                break;
+
             case CHANNEL_SOURCE_BUFFER_A:
             case CHANNEL_SOURCE_BUFFER_B:
             case CHANNEL_SOURCE_BUFFER_C:

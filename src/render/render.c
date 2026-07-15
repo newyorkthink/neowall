@@ -844,6 +844,15 @@ bool render_update_channel_texture(struct output_state *output, size_t channel_i
     /* Update the channel texture */
     output->channel_textures[channel_index] = texture;
 
+    /* Keep the multipass graph in sync after deleting/replacing the old GL
+     * object. Without this, image cycling retains a stale texture ID. */
+    if (output->multipass_shader &&
+        !multipass_set_external_texture(output->multipass_shader,
+                                        (int)channel_index, texture)) {
+        log_error("Failed to bind updated iChannel%zu texture to shader",
+                  channel_index);
+    }
+
     log_info("Updated iChannel%zu with image: %s (%ux%u) -> texture ID %u",
              channel_index, image_path, img->width, img->height, texture);
 

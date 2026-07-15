@@ -687,6 +687,22 @@ void multipass_set_channel(multipass_shader_t *shader,
                            int channel, channel_source_t source);
 
 /**
+ * Attach an OpenGL texture to every pass whose channel explicitly uses the
+ * external-texture source. If no manifest selected that source, the Image
+ * pass is selected automatically so config `channels [...]` also works on its
+ * own.
+ *
+ * NeoWall owns the texture; multipass_destroy() never deletes it.
+ *
+ * @param shader     Multipass shader
+ * @param channel    Channel index 0..3
+ * @param texture_id OpenGL texture ID (0 falls back to the noise texture)
+ * @return true if at least one pass was bound
+ */
+bool multipass_set_external_texture(multipass_shader_t *shader,
+                                    int channel, GLuint texture_id);
+
+/**
  * Register a user uniform declared by a manifest. It is injected into the
  * shader wrapper and set every frame (from a live reactive signal, or as a
  * constant). No effect if the uniform table is full.

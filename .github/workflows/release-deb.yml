@@ -1,0 +1,189 @@
+name: Release Debian packages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version number (for example 0.5.3)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  MESON_ARGS: "--prefix=/usr --buildtype=release -Doptimization=2 -Db_lto=true"
+
+jobs:
+  build-debian:
+    name: Build Debian 12 package
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[release-deb]')
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential git pkg-config meson ninja-build \
+            libwayland-dev wayland-protocols libwayland-egl1-mesa \
+            libx11-dev libxrandr-dev libegl1-mesa-dev libgl-dev \
+            libpng-dev libjpeg-dev ruby ruby-dev rubygems
+          gem install --no-document fpm
+
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="$(tr -d '[:space:]' < .github/RELEASE_DEB)"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build and stage
+        run: |
+          meson setup build $MESON_ARGS
+          ninja -C build
+          DESTDIR="$PWD/pkgroot" ninja -C build install
+
+      - name: Build .deb
+        run: |
+          version="${{ steps.version.outputs.value }}"
+          mkdir -p dist
+          fpm -s dir -t deb -n neowall -v "$version" \
+            --description "GPU-accelerated live shader wallpapers for Wayland and X11" \
+            --url "https://github.com/newyorkthink/neowall" \
+            --license MIT --maintainer "newyorkthink <newyorkthink@gmail.com>" \
+            --architecture amd64 \
+            --depends "libwayland-client0" --depends "libwayland-egl1" \
+            --depends "libegl1" --depends "libgl1" \
+            --depends "libpng16-16" --depends "libjpeg62-turbo" \
+            --depends "libx11-6" --depends "libxrandr2" \
+            --deb-no-default-config-files \
+            -C pkgroot -p "dist/neowall_${version}_debian12_amd64.deb" usr
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-package
+          path: dist/*.deb
+          if-no-files-found: error
+
+  build-ubuntu:
+    name: Build Ubuntu 24.04 package
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[release-deb]')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git pkg-config meson ninja-build \
+            libwayland-dev wayland-protocols libwayland-egl1 \
+            libx11-dev libxrandr-dev libegl1-mesa-dev libgl-dev \
+            libpng-dev libjpeg-dev ruby ruby-dev
+          sudo gem install --no-document fpm
+
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="$(tr -d '[:space:]' < .github/RELEASE_DEB)"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build and stage
+        run: |
+          meson setup build $MESON_ARGS
+          ninja -C build
+          DESTDIR="$PWD/pkgroot" ninja -C build install
+
+      - name: Build .deb
+        run: |
+          version="${{ steps.version.outputs.value }}"
+          mkdir -p dist
+          fpm -s dir -t deb -n neowall -v "$version" --iteration ubuntu24.04 \
+            --description "GPU-accelerated live shader wallpapers for Wayland and X11" \
+            --url "https://github.com/newyorkthink/neowall" \
+            --license MIT --maintainer "newyorkthink <newyorkthink@gmail.com>" \
+            --architecture amd64 \
+            --depends "libwayland-client0" --depends "libwayland-egl1" \
+            --depends "libegl1" --depends "libgl1" \
+            --depends "libpng16-16t64" --depends "libjpeg-turbo8" \
+            --depends "libx11-6" --depends "libxrandr2" \
+            --deb-no-default-config-files \
+            -C pkgroot -p "dist/neowall_${version}-ubuntu24.04_amd64.deb" usr
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-package
+          path: dist/*.deb
+          if-no-files-found: error
+
+  release:
+    name: Publish Debian packages
+    needs: [build-debian, build-ubuntu]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="$(tr -d '[:space:]' < .github/RELEASE_DEB)"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect and checksum packages
+        run: |
+          mkdir -p release
+          find artifacts -type f -name '*.deb' -exec cp -v {} release/ \;
+          cd release
+          sha256sum *.deb > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release and upload packages
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.value }}
+          target_commitish: ${{ github.sha }}
+          name: NeoWall v${{ steps.version.outputs.value }}
+          body: |
+            Fix external image textures for GLSL `iChannel0..3` inputs.
+
+            This release connects configured `channels [...]` images to the
+            multipass shader graph and correctly binds `CHANNEL_SOURCE_TEXTURE`.
+
+            Debian 12:
+            `sudo apt install ./neowall_${{ steps.version.outputs.value }}_debian12_amd64.deb`
+
+            Ubuntu 24.04+:
+            `sudo apt install ./neowall_${{ steps.version.outputs.value }}-ubuntu24.04_amd64.deb`
+          files: release/*
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false

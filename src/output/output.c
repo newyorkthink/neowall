@@ -927,6 +927,35 @@ nw_result output_set_shader(struct output_state *output, const char *shader_path
      * wrapper) and before GL init (so buffer-channel indices are correct). */
     manifest_apply(output->multipass_shader, manifest_path);
 
+    /* Decode configured channel images, upload them to this output's GL
+     * context, and hand the resulting IDs to the multipass graph. Previously
+     * config.c parsed channels[] and render.c implemented the loader, but this
+     * shader-load path never connected the two. */
+    if (output->config->channel_paths && output->config->channel_count > 0) {
+        if (!render_load_channel_textures(output, output->config)) {
+            log_error("Failed to initialize configured shader channel textures");
+            multipass_destroy(output->multipass_shader);
+            output->multipass_shader = NULL;
+            return nw_err(NW_ERR_GL, "channel texture initialization failed");
+        }
+
+        size_t count = output->config->channel_count;
+        if (count > MULTIPASS_MAX_CHANNELS) {
+            count = MULTIPASS_MAX_CHANNELS;
+        }
+        for (size_t i = 0; i < count; i++) {
+            const char *path = output->config->channel_paths[i];
+            if (path && strcmp(path, "_") == 0) {
+                continue;
+            }
+            if (!multipass_set_external_texture(output->multipass_shader,
+                                                (int)i,
+                                                output->channel_textures[i])) {
+                log_error("No Image or manifest-bound pass accepts iChannel%zu", i);
+            }
+        }
+    }
+
     /* Initialize GL resources for multipass rendering */
     if (!multipass_init_gl(output->multipass_shader, output->width, output->height)) {
         log_error("Failed to initialize multipass GL resources for: %s", shader_path);
