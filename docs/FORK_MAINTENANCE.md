@@ -11,6 +11,8 @@ merged normally.
 - Binds `CHANNEL_SOURCE_TEXTURE` during rendering and refreshes the binding
   when a cycling image replaces an existing texture.
 - Publishes tested Debian 12, Ubuntu 22.04, and Ubuntu 24.04 `.deb` packages.
+- Publishes an Ubuntu 22.04-based AppImage with `libjpeg.so.8` bundled by
+  `linuxdeploy`.
 
 ## Sync upstream safely
 
@@ -40,13 +42,18 @@ Conflicts, if any, should normally be limited to the external-texture code in:
 Keep the fork's texture binding behavior when resolving those conflicts, then
 run the normal Build and Quality workflows before merging.
 
-## Publish a stable Debian-family release
+## Publish a stable release
 
 1. Merge and validate all source changes on `main`.
 2. Set the same semantic version in `meson.build` and `.github/RELEASE_DEB`.
 3. Commit and push both version changes together.
 
 Changing `.github/RELEASE_DEB` on `main` starts the release workflow. It builds
-three packages, generates `SHA256SUMS.txt`, creates the matching `vX.Y.Z` tag,
-and uploads everything to GitHub Releases. The workflow can also be run
-manually from the Actions page with an explicit version.
+three native packages plus the Ubuntu 22.04 AppImage, generates
+`SHA256SUMS.txt`, creates the matching `vX.Y.Z` tag, and uploads everything to
+GitHub Releases. The workflow can also be run manually from the Actions page
+with an explicit version.
+
+The AppImage build is kept in
+`packaging/build-appimage-ubuntu22.04.sh`. See `docs/APPIMAGE.md` for its build
+dependencies, bundled-library guarantee, and FUSE3-system usage.

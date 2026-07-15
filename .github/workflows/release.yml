@@ -367,16 +367,17 @@ jobs:
   # AppImage — distro-agnostic, runs anywhere with glibc >= build host
   # ---------------------------------------------------------------------------
   build-appimage:
-    name: Build (AppImage)
+    name: Build (Ubuntu 22.04 AppImage)
     runs-on: ubuntu-22.04
     steps:
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential git pkg-config meson ninja-build \
+            curl file binutils desktop-file-utils fuse3 libfuse2 \
             libwayland-dev wayland-protocols libwayland-egl1 \
             libx11-dev libxrandr-dev libegl1-mesa-dev libgl-dev \
-            libpng-dev libjpeg-dev wget file desktop-file-utils
+            libpng-dev libjpeg-dev
 
       - uses: actions/checkout@v4
         with:
@@ -392,24 +393,11 @@ jobs:
           fi
           echo "VERSION=$V" >> "$GITHUB_OUTPUT"
 
-      - name: Build & stage into AppDir
+      - name: Build, deploy, and verify AppImage
+        env:
+          VERSION: ${{ steps.ver.outputs.VERSION }}
         run: |
-          meson setup build $MESON_ARGS
-          ninja -C build
-          DESTDIR="$PWD/AppDir" ninja -C build install
-          # AppImage expects an AppRun + top-level .desktop + icon.
-          ln -s usr/bin/neowall AppDir/AppRun
-          cp packaging/neowall.desktop AppDir/neowall.desktop
-          cp packaging/neowall.svg AppDir/neowall.svg
-
-      - name: Package AppImage
-        run: |
-          V="${{ steps.ver.outputs.VERSION }}"
-          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x appimagetool-x86_64.AppImage
-          ARCH=x86_64 ./appimagetool-x86_64.AppImage --appimage-extract >/dev/null
-          mkdir -p dist
-          ARCH=x86_64 ./squashfs-root/AppRun AppDir "dist/neowall-${V}-x86_64.AppImage"
+          packaging/build-appimage-ubuntu22.04.sh
 
       - uses: actions/upload-artifact@v4
         with:

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+APPDIR="$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)"
+
+# Prefer the libraries deployed inside the AppImage. This is intentionally
+# explicit so libjpeg.so.8 never falls back to a host-only dependency.
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+exec "$APPDIR/usr/bin/neowall" "$@"

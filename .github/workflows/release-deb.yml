@@ -1,4 +1,4 @@
-name: Release Debian packages
+name: Release stable packages
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version number (for example 0.5.4)"
+        description: "Version number (for example 0.5.5)"
         required: true
         type: string
 
@@ -120,18 +120,49 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: deb-${{ matrix.slug }}
+          name: package-deb-${{ matrix.slug }}
           path: dist/*.deb
+          if-no-files-found: error
+
+  appimage:
+    name: Build Ubuntu 22.04 AppImage
+    needs: prepare
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build and AppImage dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git pkg-config meson ninja-build curl file binutils \
+            desktop-file-utils fuse3 libfuse2 \
+            libwayland-dev wayland-protocols libwayland-egl1 \
+            libx11-dev libxrandr-dev libegl1-mesa-dev libgl-dev \
+            libpng-dev libjpeg-dev
+
+      - name: Build, deploy, and verify AppImage
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: packaging/build-appimage-ubuntu22.04.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-appimage-ubuntu2204
+          path: dist/*.AppImage
           if-no-files-found: error
 
   release:
     name: Publish stable release
-    needs: [prepare, build]
+    needs: [prepare, build, appimage]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: deb-*
+          pattern: package-*
           path: artifacts
           merge-multiple: true
 
@@ -139,9 +170,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
-          cp artifacts/*.deb release/
+          cp artifacts/*.deb artifacts/*.AppImage release/
           cd release
-          sha256sum *.deb > SHA256SUMS.txt
+          sha256sum *.deb *.AppImage > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release and upload packages
@@ -151,20 +182,28 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: NeoWall v${{ needs.prepare.outputs.version }} (stable)
           body: |
-            Stable Debian-family release of NeoWall.
+            Stable Linux release of NeoWall.
 
             Includes the external image-texture fix for GLSL `iChannel0..3`
-            and native packages for Debian 12, Ubuntu 22.04, and Ubuntu 24.04.
+            plus native packages and an Ubuntu 22.04-based AppImage.
 
             | System | Package |
             | --- | --- |
             | Debian 12 | `neowall_${{ needs.prepare.outputs.version }}-debian12_amd64.deb` |
             | Ubuntu 22.04 | `neowall_${{ needs.prepare.outputs.version }}-ubuntu22.04_amd64.deb` |
             | Ubuntu 24.04 | `neowall_${{ needs.prepare.outputs.version }}-ubuntu24.04_amd64.deb` |
+            | AppImage (x86-64) | `neowall-${{ needs.prepare.outputs.version }}-ubuntu22.04-x86_64.AppImage` |
 
             Install the matching package with:
 
             `sudo apt install ./neowall_*.deb`
+
+            The AppImage bundles `libjpeg.so.8`. On a FUSE3-based Ubuntu
+            system, keep FUSE3 and install the compatible AppImage userspace
+            library with `sudo apt install libfuse2`. If mounting is not
+            available, use:
+
+            `APPIMAGE_EXTRACT_AND_RUN=1 ./neowall-*.AppImage`
 
             Verify downloads with `SHA256SUMS.txt`.
           files: release/*
