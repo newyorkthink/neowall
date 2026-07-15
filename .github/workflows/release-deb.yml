@@ -3,165 +3,143 @@ name: Release Debian packages
 on:
   push:
     branches: [main]
+    paths:
+      - .github/RELEASE_DEB
   workflow_dispatch:
     inputs:
       version:
-        description: "Version number (for example 0.5.3)"
+        description: "Version number (for example 0.5.4)"
         required: true
         type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-deb-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   MESON_ARGS: "--prefix=/usr --buildtype=release -Doptimization=2 -Db_lto=true"
 
 jobs:
-  build-debian:
-    name: Build Debian 12 package
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.head_commit.message, '[release-deb]')
+  prepare:
+    name: Validate release version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and validate version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="$(tr -d '[:space:]' < .github/RELEASE_DEB)"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          grep -Fq "version: '$version'" meson.build
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }} package
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: debian12
+            label: Debian 12
+            image: debian:bookworm
+            wayland_egl_build: libwayland-egl1-mesa
+            png_runtime: libpng16-16
+            jpeg_runtime: libjpeg62-turbo
+            iteration: debian12
+          - slug: ubuntu2204
+            label: Ubuntu 22.04
+            image: ubuntu:22.04
+            wayland_egl_build: libwayland-egl1
+            png_runtime: libpng16-16
+            jpeg_runtime: libjpeg-turbo8
+            iteration: ubuntu22.04
+          - slug: ubuntu2404
+            label: Ubuntu 24.04
+            image: ubuntu:24.04
+            wayland_egl_build: libwayland-egl1
+            png_runtime: libpng16-16t64
+            jpeg_runtime: libjpeg-turbo8
+            iteration: ubuntu24.04
     container:
-      image: debian:bookworm
+      image: ${{ matrix.image }}
     steps:
       - name: Install build dependencies
+        shell: bash
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y build-essential git pkg-config meson ninja-build \
-            libwayland-dev wayland-protocols libwayland-egl1-mesa \
+            libwayland-dev wayland-protocols "${{ matrix.wayland_egl_build }}" \
             libx11-dev libxrandr-dev libegl1-mesa-dev libgl-dev \
-            libpng-dev libjpeg-dev ruby ruby-dev rubygems
+            libpng-dev libjpeg-dev ruby ruby-dev rubygems ca-certificates
           gem install --no-document fpm
 
       - uses: actions/checkout@v4
 
-      - name: Resolve version
-        id: version
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            version="${{ github.event.inputs.version }}"
-          else
-            version="$(tr -d '[:space:]' < .github/RELEASE_DEB)"
-          fi
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          echo "value=$version" >> "$GITHUB_OUTPUT"
-
       - name: Build and stage
+        shell: bash
         run: |
           meson setup build $MESON_ARGS
           ninja -C build
           DESTDIR="$PWD/pkgroot" ninja -C build install
+          build/neowall --version
 
       - name: Build .deb
+        shell: bash
         run: |
-          version="${{ steps.version.outputs.value }}"
+          version="${{ needs.prepare.outputs.version }}"
           mkdir -p dist
           fpm -s dir -t deb -n neowall -v "$version" \
+            --iteration "${{ matrix.iteration }}" \
             --description "GPU-accelerated live shader wallpapers for Wayland and X11" \
             --url "https://github.com/newyorkthink/neowall" \
             --license MIT --maintainer "newyorkthink <newyorkthink@gmail.com>" \
             --architecture amd64 \
             --depends "libwayland-client0" --depends "libwayland-egl1" \
             --depends "libegl1" --depends "libgl1" \
-            --depends "libpng16-16" --depends "libjpeg62-turbo" \
+            --depends "${{ matrix.png_runtime }}" \
+            --depends "${{ matrix.jpeg_runtime }}" \
             --depends "libx11-6" --depends "libxrandr2" \
             --deb-no-default-config-files \
-            -C pkgroot -p "dist/neowall_${version}_debian12_amd64.deb" usr
+            -C pkgroot \
+            -p "dist/neowall_${version}-${{ matrix.iteration }}_amd64.deb" usr
 
       - uses: actions/upload-artifact@v4
         with:
-          name: debian-package
-          path: dist/*.deb
-          if-no-files-found: error
-
-  build-ubuntu:
-    name: Build Ubuntu 24.04 package
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.head_commit.message, '[release-deb]')
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential git pkg-config meson ninja-build \
-            libwayland-dev wayland-protocols libwayland-egl1 \
-            libx11-dev libxrandr-dev libegl1-mesa-dev libgl-dev \
-            libpng-dev libjpeg-dev ruby ruby-dev
-          sudo gem install --no-document fpm
-
-      - uses: actions/checkout@v4
-
-      - name: Resolve version
-        id: version
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            version="${{ github.event.inputs.version }}"
-          else
-            version="$(tr -d '[:space:]' < .github/RELEASE_DEB)"
-          fi
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          echo "value=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Build and stage
-        run: |
-          meson setup build $MESON_ARGS
-          ninja -C build
-          DESTDIR="$PWD/pkgroot" ninja -C build install
-
-      - name: Build .deb
-        run: |
-          version="${{ steps.version.outputs.value }}"
-          mkdir -p dist
-          fpm -s dir -t deb -n neowall -v "$version" --iteration ubuntu24.04 \
-            --description "GPU-accelerated live shader wallpapers for Wayland and X11" \
-            --url "https://github.com/newyorkthink/neowall" \
-            --license MIT --maintainer "newyorkthink <newyorkthink@gmail.com>" \
-            --architecture amd64 \
-            --depends "libwayland-client0" --depends "libwayland-egl1" \
-            --depends "libegl1" --depends "libgl1" \
-            --depends "libpng16-16t64" --depends "libjpeg-turbo8" \
-            --depends "libx11-6" --depends "libxrandr2" \
-            --deb-no-default-config-files \
-            -C pkgroot -p "dist/neowall_${version}-ubuntu24.04_amd64.deb" usr
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ubuntu-package
+          name: deb-${{ matrix.slug }}
           path: dist/*.deb
           if-no-files-found: error
 
   release:
-    name: Publish Debian packages
-    needs: [build-debian, build-ubuntu]
+    name: Publish stable release
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Resolve version
-        id: version
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            version="${{ github.event.inputs.version }}"
-          else
-            version="$(tr -d '[:space:]' < .github/RELEASE_DEB)"
-          fi
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          echo "value=$version" >> "$GITHUB_OUTPUT"
-
       - uses: actions/download-artifact@v4
         with:
+          pattern: deb-*
           path: artifacts
+          merge-multiple: true
 
       - name: Collect and checksum packages
+        shell: bash
         run: |
           mkdir -p release
-          find artifacts -type f -name '*.deb' -exec cp -v {} release/ \;
+          cp artifacts/*.deb release/
           cd release
           sha256sum *.deb > SHA256SUMS.txt
           cat SHA256SUMS.txt
@@ -169,20 +147,26 @@ jobs:
       - name: Create GitHub Release and upload packages
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.value }}
+          tag_name: v${{ needs.prepare.outputs.version }}
           target_commitish: ${{ github.sha }}
-          name: NeoWall v${{ steps.version.outputs.value }}
+          name: NeoWall v${{ needs.prepare.outputs.version }} (stable)
           body: |
-            Fix external image textures for GLSL `iChannel0..3` inputs.
+            Stable Debian-family release of NeoWall.
 
-            This release connects configured `channels [...]` images to the
-            multipass shader graph and correctly binds `CHANNEL_SOURCE_TEXTURE`.
+            Includes the external image-texture fix for GLSL `iChannel0..3`
+            and native packages for Debian 12, Ubuntu 22.04, and Ubuntu 24.04.
 
-            Debian 12:
-            `sudo apt install ./neowall_${{ steps.version.outputs.value }}_debian12_amd64.deb`
+            | System | Package |
+            | --- | --- |
+            | Debian 12 | `neowall_${{ needs.prepare.outputs.version }}-debian12_amd64.deb` |
+            | Ubuntu 22.04 | `neowall_${{ needs.prepare.outputs.version }}-ubuntu22.04_amd64.deb` |
+            | Ubuntu 24.04 | `neowall_${{ needs.prepare.outputs.version }}-ubuntu24.04_amd64.deb` |
 
-            Ubuntu 24.04+:
-            `sudo apt install ./neowall_${{ steps.version.outputs.value }}-ubuntu24.04_amd64.deb`
+            Install the matching package with:
+
+            `sudo apt install ./neowall_*.deb`
+
+            Verify downloads with `SHA256SUMS.txt`.
           files: release/*
           fail_on_unmatched_files: true
           draft: false
